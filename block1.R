@@ -20,5 +20,5 @@ for (i in seq_along(taus)) {
 
 results <- loo::nlist(A, B, C)
 
-out_file <- paste0('iteration_', iteration, '.csv')
+out_file <- paste0('iteration_', get.seed, '.csv')
 write_rds(results, out_file)
