@@ -172,10 +172,45 @@ observational_random_intercepts <- function(tau, type, g1.ICC = .1, g2.ICC = .2,
                    seed = 0)
   
   results[[length(results) + 1]] <- extract.stan4bart(s4b.trees, .model = 'stan4bart with many trees')
+
+  # refit but now with p.scores 
+  dat$p.score <- bart$p.score
+  
+  # vanillia 
+  ps.s4b <- stan4bart(y ~ bart(. -g1 -g2) + (1|g1) + (1|g2), 
+                   data = dat, 
+                   treatment = treat, 
+                   cores = 1, 
+                   chains = 4, 
+                   seed = 0)
+  
+  results[[length(results) + 1]] <- extract.stan4bart(ps.s4b, .model = 'vanilla stan4bart with p.score')
+  
+  # with a fixed z
+  ps.s4b.z <- stan4bart(y ~ treat + bart(. -g1 -g2) + (1|g1) + (1|g2), 
+                     data = dat, 
+                     treatment = treat, 
+                     cores = 1, 
+                     chains = 4, 
+                     seed = 0)
+  
+  results[[length(results) + 1]] <- extract.stan4bart(ps.s4b.z, .model = 'stan4bart with linear z with p.score')
+  
+  # with many trees 
+  ps.s4b.trees <- stan4bart(y ~ bart(. -g1 -g2) + (1|g1) + (1|g2), 
+                         data = dat, 
+                         treatment = treat, 
+                         cores = 1, 
+                         chains = 4, 
+                         bart_args = list(n.trees = 200), 
+                         seed = 0)
+  
+  results[[length(results) + 1]] <- extract.stan4bart(ps.s4b.trees, .model = 'stan4bart with many trees with p.score')
+  
   singular <- isSingular(partial_pool)
   results <- results %>% bind_rows()
-  rownames(results) <- 1:9
-  
+  rownames(results) <- 1:nrow(results)
+
   out <-  loo::nlist(
     results,
     singular,
@@ -190,11 +225,3 @@ observational_random_intercepts <- function(tau, type, g1.ICC = .1, g2.ICC = .2,
   return(out)
 
 }
-
-taus <- c(0, .1, .2, .5, .8)
-results <- map(taus, function(i){
-  observational_random_intercepts(tau = taus[i], seed = iteration)
-})
-
-out_file <- paste0('iteration_', iteration, '.csv')
-write_rds(results, out_file)
