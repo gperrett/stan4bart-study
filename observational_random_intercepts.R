@@ -190,11 +190,3 @@ observational_random_intercepts <- function(tau, type, g1.ICC = .1, g2.ICC = .2,
   return(out)
 
 }
-
-taus <- c(0, .1, .2, .5, .8)
-results <- map(taus, function(i){
-  observational_random_intercepts(tau = taus[i], seed = iteration)
-})
-
-out_file <- paste0('iteration_', iteration, '.csv')
-write_rds(results, out_file)
