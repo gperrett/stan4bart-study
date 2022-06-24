@@ -7,8 +7,6 @@ source('get_balance.R')
 source('models.R')
 
 observational_random_intercepts <- function(tau, type, g1.ICC = .1, g2.ICC = .2, seed = NULL){
-  tau <<- tau
-
   ihdp <- load_ihdp()
   
   set.seed(seed)
@@ -86,25 +84,24 @@ observational_random_intercepts <- function(tau, type, g1.ICC = .1, g2.ICC = .2,
   g2_intercept <- rnorm(n.g2, 0, sqrt(g2.ICC))
   y <- y + g1_intercept[g1]
   y <- y + g2_intercept[g2]
-  y <<- y
-  
+
   dat <- cbind(y, treat, X, g1, g2)
 
   # get causal stats
   balance <- get_balance(dat[, c(covs.cat, covs.cont)], dat$treat , estimand = 'ATT')
   
-  average.truth <<- mean(y1[treat ==1] - y0[treat ==1])
+  average.truth <- mean(y1[treat ==1] - y0[treat ==1])
   
-  icate.truth <<- y1[treat ==1] - y0[treat ==1]
+  icate.truth <- y1[treat ==1] - y0[treat ==1]
   
-  g1.truth <<-  tibble(g1 = dat$g1, y1, y0, z = treat) %>% 
+  g1.truth <-  tibble(g1 = dat$g1, y1, y0, z = treat) %>% 
     filter(z ==1) %>% 
     group_by(g1) %>% 
     summarise(g1.truth = mean(y1 - y0)) %>% 
     select(g1.truth) %>% 
     as_vector()
   
-  g2.truth <<- tibble(g2 = dat$g2, y1, y0, z = treat) %>% 
+  g2.truth <- tibble(g2 = dat$g2, y1, y0, z = treat) %>% 
     filter(z ==1) %>% 
     group_by(g2) %>% 
     summarise(g2.truth = mean(y1 - y0)) %>% 

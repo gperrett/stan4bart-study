@@ -12,9 +12,11 @@ get.seed <- Sys.getenv('SLURM_ARRAY_TASK_ID')
 
 taus <- c(0, .1, .2, .5, .8)
 
-A <- lapply(1:length(taus), function(i) observational_random_intercepts(tau = taus[i], type = 'A', seed = get.seed))
-B <- lapply(1:length(taus), function(i) observational_random_intercepts(tau = taus[i], type = 'B', seed = get.seed))
-C <- lapply(1:length(taus), function(i) observational_random_intercepts(tau = taus[i], type = 'C', seed = get.seed))
+for (i in seq_along(taus)) {
+  A[[i]] <- observational_random_intercepts(tau = taus[i], type = 'A', seed = get.seed)
+  B[[i]] <- observational_random_intercepts(tau = taus[i], type = 'B', seed = get.seed)
+  C[[i]] <- observational_random_intercepts(tau = taus[i], type = 'C', seed = get.seed)
+}
 
 results <- loo::nlist(A, B, C)
 
