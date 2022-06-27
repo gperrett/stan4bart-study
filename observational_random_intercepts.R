@@ -225,5 +225,5 @@ observational_random_intercepts <- function(tau, type, g1.ICC = .1, g2.ICC = .2,
   )
   
   return(out)
-
+  cat('iteraction complete!')
 }
