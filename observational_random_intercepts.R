@@ -3,7 +3,6 @@ library(lme4)
 library(bartCause)
 library(stan4bart)
 source('load_ihdp.R')
-source('get_balance.R')
 source('models.R')
 
 observational_random_intercepts <- function(tau, type, seed = NULL){
