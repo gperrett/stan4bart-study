@@ -118,13 +118,13 @@ observational_random_intercepts <- function(tau, type, seed = NULL){
   # linear regression with no group info
   lin.reg <- lm(y ~ . -g1 -g2, data = dat)
   results[[1]] <- linear.regression(lin.reg, .model = c('linear regression'))
-  rm(no_pool)
+  rm(lin.reg)
   gc()
   
   # linear regresson with fixed effects
   lin.reg.fix <- lm(y ~ ., data = dat)
   results[[length(results) + 1]] <- linear.regression(lin.reg.fix, .model = 'linear regression + fixed effects')
-  rm(full_pool)
+  rm(lin.reg.fix )
   gc()
   
   # linear regression partial pooling i.e. lme4
