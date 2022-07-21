@@ -102,7 +102,7 @@ interval.extract.bart <- function(fit, .model){
   g1.intervals$s_bias <- (g1.pred - g1.truth)/sd(y)
   g1.intervals$int.length <- g1.intervals$`97.5%` - g1.intervals$`2.5%`
   g1.intervals$model <- .model
-  g1.intervals$group <- rownames(g1.intervals)
+  g1.intervals$group <- unique(g1)
   g1.intervals$tau <- tau
   
   g2.splits <- split(as.data.frame(t(samples.icate)), g2)
@@ -114,7 +114,7 @@ interval.extract.bart <- function(fit, .model){
   g2.intervals$s_bias <- (g2.pred - g2.truth)/sd(y)
   g2.intervals$int.length <- g2.intervals$`97.5%` - g2.intervals$`2.5%`
   g2.intervals$model <- .model
-  g2.intervals$group <- rownames(g2.intervals)
+  g2.intervals$group <- unique(g2)
   g2.intervals$tau <- tau
   
   list(g1.intervals, g2.intervals)
