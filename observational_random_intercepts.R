@@ -135,7 +135,7 @@ observational_random_intercepts <- function(tau, type, seed = NULL){
   bart <- bartc(y, treat, . -g1 -g2, data = dat, estimand = 'att', seed = 0,n.threads = 1)
   
   results[[length(results) + 1]] <- extract.bart(bart, 'vanilla bart')
-  groups <- interval.extract.bart(bart, 'vanilla bart no pooling')
+  groups <- interval.extract.bart(bart, 'vanilla bart')
   g1.results[[length(g1.results) + 1]] <- groups[[1]]
   g2.results[[length(g2.results) + 1]] <- groups[[2]]
 
