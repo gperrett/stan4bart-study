@@ -1,14 +1,18 @@
 library(tidyverse)
-library(lme4)
 library(bartCause)
 library(stan4bart)
+library(rstanarm)
+library(bcf)
 source('load_ihdp.R')
-source('get_balance.R')
 source('models.R')
 
-observational_random_slopes <- function(tau, type, g1.ICC = .1, g2.ICC = .2, .rho =.2, seed = NULL){
+observational_random_slopes <- function(tau, type, seed = NULL, group = 'g1', .rho = .2){
+  
   tau <<- tau
   ihdp <- load_ihdp()
+  group <<- group
+  
+  treat <<- ihdp$treat
   
   set.seed(seed)
   
@@ -28,17 +32,20 @@ observational_random_slopes <- function(tau, type, g1.ICC = .1, g2.ICC = .2, .rh
   N = nrow(X)
   dimx = ncol(X)
   Xmat = as.matrix(X)
-  g1 <- ihdp$g1
-  g2 <- ihdp$g2
-  n.g1 <- length(unique(g1))
-  n.g2 <- length(unique(g2))
+  
+  g <<- switch (group,
+                g1 = ihdp$g1, 
+                g2 = ihdp$g2
+  )
+  
+  n.g <- length(unique(g))
   
   # liner treatment version A
   if(type == 'A'){
     betaA = sample(c(0:4),dimx+1,replace=TRUE,prob=c(.5,.2,.15,.1,.05))
     y0hat = cbind(rep(1, N), Xmat) %*% betaA
-    y0 = rnorm(N, y0hat, 1)
-    y1 = rnorm(N, y0hat+(tau*sd(y0hat)), 1)
+    y1hat = y0hat+(tau*sd(y0hat)) 
+
   }
   
   if(type == 'B'){
@@ -48,24 +55,23 @@ observational_random_slopes <- function(tau, type, g1.ICC = .1, g2.ICC = .2, .rh
     offset = c(mean(y1hat[ihdp$treat==1] - y0hat[ihdp$treat==1])) - (tau *sd(y0hat))
     y1hat = cbind(rep(1, N), (Xmat + .5)) %*% betaB -offset
     
-    y0 = rnorm(N, y0hat, 1)
-    y1 = rnorm(N, y1hat, 1)
   }
   
   if(type == 'C'){
     # get model matrix
     ytmp=rnorm(N)
-    mod.bal <- glm(formula=ytmp~(bw+b.head+preterm+birth.o+nnhealth+sex+twin+b.marr+mom.lths+mom.hs+mom.scoll+cig+first+booze+drugs+work.dur+prenatal)^2 + I(bw^2) + I(b.head^2) + I(preterm^2) + I(birth.o^2) + I(nnhealth^2),x=T,data=cbind.data.frame(Xmat))
+    mod.bal <- glm(formula=ytmp~(bw+b.head+preterm+birth.o+nnhealth+sex+twin+b.marr+mom.lths+mom.hs+mom.scoll+cig+first+booze+drugs+work.dur+prenatal)^2 + I(bw^2) + I(b.head^2) 
+                   + I(preterm^2) + I(birth.o^2) + I(nnhealth^2),x=T,data=cbind.data.frame(Xmat))
     coefs <- mod.bal$coef
     XX <- mod.bal$x
     XX <- XX[,!is.na(coefs)]
     
     # create y 
-    betaC.m0 = sample(c(0,1,2),p+1,replace=T,prob=c(.6,.3,.1))
-    betaC.m1 = sample(c(0,1,2),p+1,replace=T,prob=c(.6,.3,.1))
+    betaC.m0 = sample(c(0,1,2),p+1,replace=T,prob=c(.5,.4,.1))
+    betaC.m1 = sample(c(0,1,2),p+1,replace=T,prob=c(.5,.4,.1))
     # quadratic coefficients
-    betaC.q0 = sample(c(0,.5,1),ncol(XX)-(p+1),replace=TRUE,prob=c(.8,.15,.05))
-    betaC.q1 = sample(c(0,.5,1),ncol(XX)-(p+1),replace=TRUE,prob=c(.8,.15,.05))
+    betaC.q0 = sample(c(0,.5,1),ncol(XX)-(p+1),replace=TRUE,prob=c(.7,.25,.05))
+    betaC.q1 = sample(c(0,.5,1),ncol(XX)-(p+1),replace=TRUE,prob=c(.7,.25,.05))
     #
     betaC0 = c(betaC.m0,betaC.q0)
     betaC1 = c(betaC.m1,betaC.q1)
@@ -73,189 +79,175 @@ observational_random_slopes <- function(tau, type, g1.ICC = .1, g2.ICC = .2, .rh
     y1hat = (XX) %*% betaC1 
     offset = c(mean(y1hat[ihdp$treat==1] - y0hat[ihdp$treat==1])) - (tau *sd(y0hat))
     y1hat = (XX) %*% betaC1 - offset
-    y0 = rnorm(N, y0hat, 1)
-    y1 = rnorm(N, y1hat, 1)
+
   }
   
-  y <- if_else(treat == 1, y1, y0)
   
-  # add group effects 
-  # create random effects 
   Mu <- c(0, 0)
   rho = .rho
   Rho <- matrix(c(1, rho, rho, 1), nrow = 2)
-  sigmas <- c(sqrt(g1.ICC), .1)
+  sigmas <- c(1, .2)
   Sigma <- diag(sigmas) %*% Rho %*% diag(sigmas)
-  g1.mat <- MASS::mvrnorm(n.g1, Mu, Sigma, empirical = TRUE)
+  random_effects <- MASS::mvrnorm(n.g, Mu, Sigma)
   
-  sigmas <- c(sqrt(g2.ICC), .1)
-  Sigma <- diag(sigmas) %*% Rho %*% diag(sigmas)
-  g2.mat <- MASS::mvrnorm(n.g1, Mu, Sigma, empirical = TRUE)
-
-  # add random intercepts 
-  y <- y + g1.mat[, 1][g1] + g2.mat[, 1][g2]
+  y0hat <- y0hat + random_effects[, 1][g]
+  y1hat <- y1hat + random_effects[, 1][g] + random_effects[, 2][g]
+  y1 <- rnorm(N, y1hat, 1)
+  y0 <- rnorm(N, y0hat, 1)
   
-  # add random slopes
-  y[treat ==1] <- y[treat ==1] + g1.mat[, 2][g1][treat==1] + g2.mat[, 2][g2][treat == 1]
+  y <- if_else(treat == 1, y1, y0)
   
   y <<- y
-  dat <<- cbind(y, treat, X, g1, g2)
+  dat <<- cbind(y, treat, X, g)
   
   # get causal stats
-  balance <- get_balance(dat[, c(covs.cat, covs.cont)], dat$treat , estimand = 'ATT')
-  
   average.truth <<- mean(y1[treat ==1] - y0[treat ==1])
   
-  icate.truth <<- y1[treat ==1] - y0[treat ==1]
+  icate.truth <<- y1hat[treat == 1] - y0hat[treat == 1]
   
-  g1.truth <<-  tibble(g1 = dat$g1, y1, y0, z = treat) %>% 
+  g.truth <<-  tibble(g = dat$g, y1, y0, z = treat) %>% 
     filter(z ==1) %>% 
-    group_by(g1) %>% 
-    summarise(g1.truth = mean(y1 - y0)) %>% 
-    select(g1.truth) %>% 
-    as_vector()
-  
-  g2.truth <<- tibble(g2 = dat$g2, y1, y0, z = treat) %>% 
-    filter(z ==1) %>% 
-    group_by(g2) %>% 
-    summarise(g2.truth = mean(y1 - y0)) %>% 
-    select(g2.truth) %>% 
+    group_by(g) %>% 
+    summarise(g.truth = mean(y1 - y0)) %>% 
+    select(g.truth) %>% 
     as_vector()
   
   
   ########## fit models #########
   results <- list()
-  # linear regression no pooling 
-  no_pool <- lm(y ~ . -g1 -g2, data = dat)
-  results[[1]] <- linear.regression(no_pool, .model = c('no pooling'))
-  rm(no_pool)
-  gc()
-  # linear regresson full pooling
-  full_pool <- lm(y ~ ., data = dat)
-  results[[length(results) + 1]] <- linear.regression(full_pool, .model = 'full pooling')
-  rm(full_pool)
+  g.results <- list()
+  
+  # linear regression with no group info
+  lin.reg <- lm(y ~ 0 + . -g, data = dat)
+  results[[1]] <- linear.regression(lin.reg, .model = c('linear regression'))
+  rm(lin.reg)
   gc()
   
-  # linear regression partial pooling i.e. lme4
-  partial_pool <- lmer(y ~ . - g1 - g2 + (z|g1) + (z|g2), data = dat)
-  results[[length(results) + 1]] <- extract.lme4(partial_pool)
-
-  # vanilla bart
-  bart <- bartc(y, treat, . -g1 -g2, data = dat, estimand = 'att', seed = 0)
-  results[[length(results) + 1]] <- extract.bart(bart, 'vanilla bart no pooling')
-  rm(bart)
+  
+  # linear regresson with fixed effects
+  lin.reg.fix <- lm(y ~ 0 + ., data = dat)
+  results[[length(results) + 1]] <- linear.regression(lin.reg.fix, .model = 'linear regression + fixed effects')
+  rm(lin.reg.fix )
   gc()
+  
+  group.lin.reg <- lm(y ~ 0 + . + treat:g, data = dat)
+  results[[length(results)]][5:8] <- linear.regression(group.lin.reg, .model = 'linear regression + fixed effects')[5:8]
+  
+  g.results[[length(g.results) + 1]] <- interval.linear.regression(group.lin.reg, .model = 'linear regression + fixed effects')
+  
+  rm(group.lin.reg)
+  gc()
+  
+  # linear regression partial pooling
+  partial_pool_random_intercepts <- stan_lmer(y ~ treat+bw+b.head+preterm+birth.o+nnhealth+sex+twin+b.marr+mom.lths+mom.hs+mom.scoll+cig+first+booze+drugs+work.dur+prenatal + (1|g), 
+                                              data = dat, cores = 1, chains = 4, seed = 0)
+  
+  results[[length(results) + 1]] <- extract.rstanarm(partial_pool_random_intercepts, 'partial pooling random intercepts')
+  g.results[[length(g.results) + 1]] <- interval.extract.rstanarm(partial_pool_random_intercepts, .model = 'partial pooling random intercepts')
+  rm(partial_pool_random_intercepts)
+  gc()
+  
+  # partial pool with random slopes
+  partial_pool_random_slopes <- stan_lmer(y ~ treat+bw+b.head+preterm+birth.o+nnhealth+sex+twin+b.marr+mom.lths+mom.hs+mom.scoll+cig+first+booze+drugs+work.dur+prenatal+(treat|g), 
+                                          data = dat, cores = 1, chains = 4, seed = 0)
+  results[[length(results) + 1]] <- extract.rstanarm(partial_pool_random_slopes, 'partial pooling random slopes')
+  g.results[[length(g.results) + 1]] <- interval.extract.rstanarm(partial_pool_random_slopes, .model = 'partial pooling random slopes')
+  rm(partial_pool_random_slopes)
+  gc()
+  
+  # vanilla bart
+  bart <- bartc(y, treat, . -g, data = dat, 
+                estimand = 'att', 
+                seed = 0,
+                n.threads = 1)
+  
+  results[[length(results) + 1]] <- extract.bart(bart, 'vanilla bart')
+  g.results[[length(g.results) + 1]] <- interval.extract.bart(bart, 'vanilla bart')
   
   # bart with fixed effects
-  f.bart <- bartc(y, treat, ., data = dat, estimand = 'att', seed = 0)
+  f.bart <- bartc(y, treat, ., data = dat, estimand = 'att', seed = 0, n.threads = 1)
   results[[length(results) + 1]] <- extract.bart(f.bart, 'bart with fixed effects')
+  g.results[[length(g.results) + 1]] <- interval.extract.bart(f.bart, 'bart with fixed effects')
   rm(f.bart)
   gc()
   
   # rbart for one of the two groups
-  r.bart <- bartc(y, treat, . -g1, 
-                  group.by = g1, 
+  r.bart <- bartc(y, treat, . -g,
+                  group.by = g,
                   data = dat,
-                  use.ranef = TRUE, 
-                  estimand = 'att', 
-                  seed = 0)
+                  group.effects = TRUE, 
+                  use.ranef = TRUE,
+                  estimand = 'att',
+                  seed = 0,
+                  n.threads = 1)
   
   results[[length(results) + 1]] <- extract.bart(r.bart, 'rbart')
+  g.results[[length(g.results) + 1]] <- interval.extract.bart(r.bart, 'rbart')
   rm(r.bart)
   gc()
   
-  # stan4bart 
   
-  # vanillia 
-  s4b <- stan4bart(y ~ bart(. -g1 -g2) + (z|g1) + (z|g2), 
-                   data = dat, 
-                   treatment = treat, 
-                   cores = 1, 
-                   chains = 4, 
-                   seed = 0)
-  
-  results[[length(results) + 1]] <- extract.stan4bart(s4b, .model = 'vanilla stan4bart')
-  rm(s4b)
-  gc()
-  # with a fixed z
-  s4b.z <- stan4bart(y ~ treat + bart(. -g1 -g2) + (z|g1) + (z|g2), 
-                     data = dat, 
-                     treatment = treat, 
-                     cores = 1, 
-                     chains = 4, 
-                     seed = 0)
-  
-  results[[length(results) + 1]] <- extract.stan4bart(s4b.z, .model = 'stan4bart with linear z')
-  rm(s4b.z)
-  gc()
-  
-  # with many trees 
-  s4b.trees <- stan4bart(y ~ bart(. -g1 -g2) + (z|g1) + (z|g2), 
-                         data = dat, 
-                         treatment = treat, 
-                         cores = 1, 
-                         chains = 4, 
-                         bart_args = list(n.trees = 200), 
-                         seed = 0)
-  
-  results[[length(results) + 1]] <- extract.stan4bart(s4b.trees, .model = 'stan4bart with many trees')
-  rm(s4b.trees)
-  gc()
-  
-  # refit but now with p.scores 
+  # refit but now with p.scores
   dat$p.score <- bart$p.score
   
-  # vanillia 
-  ps.s4b <- stan4bart(y ~ bart(. -g1 -g2) + (z|g1) + (z|g2), 
-                      data = dat, 
-                      treatment = treat, 
-                      cores = 1, 
-                      chains = 4, 
-                      seed = 0)
+  # vanillia
+  s4b_random_intercepts <- stan4bart(y ~ bart(. -g) + (1|g),
+                                     data = dat,
+                                     treatment = treat,
+                                     cores = 1,
+                                     chains = 10,
+                                     iter = 4000, 
+                                     seed = 0)
   
-  results[[length(results) + 1]] <- extract.stan4bart(ps.s4b, .model = 'vanilla stan4bart with p.score')
-  rm(ps.s4b)
+  results[[length(results) + 1]] <- extract.stan4bart(s4b_random_intercepts, .model = 'stan4bart random intercepts')
+  g.results[[length(g.results) + 1]] <- interval.extract.stan4bart(s4b_random_intercepts, 'stan4bart random intercepts')
+  rm(s4b_random_intercepts)
   gc()
   
-  # with a fixed z
-  ps.s4b.z <- stan4bart(y ~ treat + bart(. -g1 -g2) + (z|g1) + (z|g2), 
-                        data = dat, 
-                        treatment = treat, 
-                        cores = 1, 
-                        chains = 4, 
-                        seed = 0)
+  s4b_random_slopes <- stan4bart(y ~ bart(. -g) + (treat|g),
+                                 data = dat,
+                                 treatment = treat,
+                                 cores = 1,
+                                 chains = 10,
+                                 iter = 4000, 
+                                 seed = 0)
   
-  results[[length(results) + 1]] <- extract.stan4bart(ps.s4b.z, .model = 'stan4bart with linear z with p.score')
-  rm(ps.s4b.z)
-  gc()
-  # with many trees 
-  ps.s4b.trees <- stan4bart(y ~ bart(. -g1 -g2) + (z|g1) + (z|g2), 
-                            data = dat, 
-                            treatment = treat, 
-                            cores = 1, 
-                            chains = 4, 
-                            bart_args = list(n.trees = 200), 
-                            seed = 0)
   
-  results[[length(results) + 1]] <- extract.stan4bart(ps.s4b.trees, .model = 'stan4bart with many trees with p.score')
-  rm(ps.s4b.trees)
+  results[[length(results) + 1]] <- extract.stan4bart(s4b_random_slopes, .model = 'stan4bart random slopes')
+  g.results[[length(g.results) + 1]] <- interval.extract.stan4bart(s4b_random_slopes, 'stan4bart random slopes')
+  rm(s4b_random_slopes)
   gc()
   
-  singular <- isSingular(partial_pool)
-  results <- results %>% bind_rows()
+  
+  # vanilla bcf 
+  bcf_fit <- bcf(y , treat, as.matrix(X), as.matrix(X), bart$p.score, 2000, 2000)
+  results[[length(results) + 1]] <- extract.bcf(bcf_fit, .model = 'vanilla bcf')
+  g.results[[length(g.results) + 1]] <- interval.extract.bcf(bcf_fit, .model = 'vanilla bcf')
+  
+  rm(bcf_fit)
+  gc()
+  
+  groups <- matrix(nrow = nrow(dat), ncol = length(unique(g)))
+  for (i in 1:length(unique(g))) {
+    groups[, i] <- ifelse(g == unique(g)[order(unique(g))][i], 1, 0)
+  }
+  
+  names(groups) <- paste0('group_', unique(g)[order(unique(g))])
+  X_mat <- as.matrix(cbind(X, groups))
+  bcf_fit <- bcf(y , treat, X_mat, X_mat, bart$p.score, 2000, 2000)
+  results[[length(results) + 1]] <- extract.bcf(bcf_fit, .model = 'bcf with groups')
+  g.results[[length(g.results) + 1]] <- interval.extract.bcf(bcf_fit, .model = 'bcf with groups')
+  rm(bcf_fit)
+  gc()
+  
+  results <- bind_rows(results)
   rownames(results) <- 1:nrow(results)
+  group.results <- bind_rows(g.results)
   
   out <-  loo::nlist(
     results,
-    singular,
-    dat,
-    balance,
-    average.truth,
-    icate.truth,
-    g1.truth,
-    g2.truth
+    group.results 
   )
   
   return(out)
-  cat('iteraction complete!')
 }
