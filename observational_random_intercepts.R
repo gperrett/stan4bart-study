@@ -1,14 +1,11 @@
-library(tidyverse)
-library(lme4)
-library(bartCause)
-library(stan4bart)
-source('load_ihdp.R')
-source('models.R')
 
-observational_random_intercepts <- function(tau, type, seed = NULL){
+observational_random_intercepts <- function(tau, type, seed = NULL, group = 'g1'){
   
   tau <<- tau
   ihdp <- load_ihdp()
+  group <<- group
+  
+  treat <<- ihdp$treat
   
   set.seed(seed)
   
@@ -28,11 +25,14 @@ observational_random_intercepts <- function(tau, type, seed = NULL){
   N = nrow(X)
   dimx = ncol(X)
   Xmat = as.matrix(X)
-  g1 <- ihdp$g1
-  g2 <- ihdp$g2
-  n.g1 <- length(unique(g1))
-  n.g2 <- length(unique(g2))
-  
+
+  g <<- switch (group,
+    g1 = ihdp$g1, 
+    g2 = ihdp$g2
+  )
+
+  n.g <- length(unique(g))
+
   # liner treatment version A
   if(type == 'A'){
     betaA = sample(c(0:4),dimx+1,replace=TRUE,prob=c(.5,.2,.15,.1,.05))
@@ -81,111 +81,105 @@ observational_random_intercepts <- function(tau, type, seed = NULL){
   
   y <- if_else(treat == 1, y1, y0)
   
-
-  g1_intercept <- rnorm(n.g1, 0, sqrt(.1))
-  g2_intercept <- rnorm(n.g2, 0, sqrt(.2))
   
-  y <- y + g1_intercept[g1]
-  y <- y + g2_intercept[g2]
+  g_intercept <- rnorm(n.g, 0, sqrt(1))
+  
+  y <- y + g_intercept[g]
   y <<- y
-  dat <<- cbind(y, treat, X, g1, g2)
+  dat <<- cbind(y, treat, X, g)
   
   # get causal stats
   average.truth <<- mean(y1[treat ==1] - y0[treat ==1])
   
   icate.truth <<- y1hat[treat == 1] - y0hat[treat == 1]
   
-  g1.truth <<-  tibble(g1 = dat$g1, y1, y0, z = treat) %>% 
+  g.truth <<-  tibble(g = dat$g, y1, y0, z = treat) %>% 
     filter(z ==1) %>% 
-    group_by(g1) %>% 
-    summarise(g1.truth = mean(y1 - y0)) %>% 
-    select(g1.truth) %>% 
+    group_by(g) %>% 
+    summarise(g.truth = mean(y1 - y0)) %>% 
+    select(g.truth) %>% 
     as_vector()
-  
-  g2.truth <<- tibble(g2 = dat$g2, y1, y0, z = treat) %>% 
-    filter(z ==1) %>% 
-    group_by(g2) %>% 
-    summarise(g2.truth = mean(y1 - y0)) %>% 
-    select(g2.truth) %>% 
-    as_vector()
-  
+
   
   ########## fit models #########
   results <- list()
-  g1.results <- list()
-  g2.results <- list()
+  g.results <- list()
+
   # linear regression with no group info
-  lin.reg <- lm(y ~ . -g1 -g2, data = dat)
+  lin.reg <- lm(y ~ 0 + . -g, data = dat)
   results[[1]] <- linear.regression(lin.reg, .model = c('linear regression'))
   rm(lin.reg)
   gc()
   
+  
   # linear regresson with fixed effects
-  lin.reg.fix <- lm(y ~ ., data = dat)
+  lin.reg.fix <- lm(y ~ 0 + ., data = dat)
   results[[length(results) + 1]] <- linear.regression(lin.reg.fix, .model = 'linear regression + fixed effects')
   rm(lin.reg.fix )
   gc()
   
-  # linear regression partial pooling i.e. lme4
-  partial_pool <- lmer(y ~ . - g1 - g2 + (1|g1) + (1|g2), data = dat)
-  results[[length(results) + 1]] <- extract.lme4(partial_pool)
-
-  # vanilla bart
-  bart <- bartc(y, treat, . -g1 -g2, data = dat, estimand = 'att', seed = 0,n.threads = 1)
+  group.lin.reg <- lm(y ~ 0 + . + treat:g, data = dat)
+  results[[length(results)]][5:8] <- linear.regression(group.lin.reg, .model = 'linear regression + fixed effects')[5:8]
   
-  results[[length(results) + 1]] <- extract.bart(bart, 'vanilla bart')
-  groups <- interval.extract.bart(bart, 'vanilla bart')
-  g1.results[[length(g1.results) + 1]] <- groups[[1]]
-  g2.results[[length(g2.results) + 1]] <- groups[[2]]
+  g.results[[length(g.results) + 1]] <- interval.linear.regression(group.lin.reg, .model = 'linear regression + fixed effects')
+  
+  rm(group.lin.reg)
+  gc()
+  
+  # linear regression partial pooling
+  partial_pool_random_intercepts <- stan_lmer(y ~ treat+bw+b.head+preterm+birth.o+nnhealth+sex+twin+b.marr+mom.lths+mom.hs+mom.scoll+cig+first+booze+drugs+work.dur+prenatal + (1|g), 
+                                              data = dat, cores = 1, chains = 4, seed = 0)
+  
+  results[[length(results) + 1]] <- extract.rstanarm(partial_pool_random_intercepts, 'partial pooling random intercepts')
+  g.results[[length(g.results) + 1]] <- interval.extract.rstanarm(partial_pool_random_intercepts, .model = 'partial pooling random intercepts')
+  rm(partial_pool_random_intercepts)
+  gc()
+  
+  # partial pool with random slopes
+  partial_pool_random_slopes <- stan_lmer(y ~ treat+bw+b.head+preterm+birth.o+nnhealth+sex+twin+b.marr+mom.lths+mom.hs+mom.scoll+cig+first+booze+drugs+work.dur+prenatal+(treat|g), 
+                                          data = dat, cores = 1, chains = 4, seed = 0)
+  results[[length(results) + 1]] <- extract.rstanarm(partial_pool_random_slopes, 'partial pooling random slopes')
+  g.results[[length(g.results) + 1]] <- interval.extract.rstanarm(partial_pool_random_slopes, .model = 'partial pooling random slopes')
+  rm(partial_pool_random_slopes)
+  gc()
+  
+  # vanilla bart
+  bart <- bartc(y, treat, . -g, data = dat, 
+                estimand = 'att', 
+                seed = 0,
+                n.threads = 1)
 
+  results[[length(results) + 1]] <- extract.bart(bart, 'vanilla bart')
+  g.results[[length(g.results) + 1]] <- interval.extract.bart(bart, 'vanilla bart')
+  
   # bart with fixed effects
   f.bart <- bartc(y, treat, ., data = dat, estimand = 'att', seed = 0, n.threads = 1)
   results[[length(results) + 1]] <- extract.bart(f.bart, 'bart with fixed effects')
-  
-  groups <- interval.extract.bart(f.bart, 'bart with fixed effects')
-  g1.results[[length(g1.results) + 1]] <- groups[[1]]
-  g2.results[[length(g2.results) + 1]] <- groups[[2]]
+  g.results[[length(g.results) + 1]] <- interval.extract.bart(f.bart, 'bart with fixed effects')
   rm(f.bart)
   gc()
   
   # rbart for one of the two groups
-  r.bart <- bartc(y, treat, . -g1,
-                  group.by = g1,
+  r.bart <- bartc(y, treat, . -g,
+                  group.by = g,
                   data = dat,
+                  group.effects = TRUE, 
                   use.ranef = TRUE,
                   estimand = 'att',
                   seed = 0,
                   n.threads = 1)
-
+  
   results[[length(results) + 1]] <- extract.bart(r.bart, 'rbart')
-  groups <- interval.extract.bart(r.bart, 'rbart')
-  g1.results[[length(g1.results) + 1]] <- groups[[1]]
-  g2.results[[length(g2.results) + 1]] <- groups[[2]]
+  g.results[[length(g.results) + 1]] <- interval.extract.bart(r.bart, 'rbart')
   rm(r.bart)
   gc()
   
-  # stan4bart
-  # vanillia
-  s4b <- stan4bart(y ~ bart(. -g1 -g2) + (1|g1) + (1|g2),
-                   data = dat,
-                   treatment = treat,
-                   cores = 1,
-                   chains = 10,
-                   iter = 4000,
-                   seed = 0)
-
-  results[[length(results) + 1]] <- extract.stan4bart(s4b, .model = 'vanilla stan4bart')
-  groups <- interval.extract.stan(s4b, 'vanilla stan4bart')
-  g1.results[[length(g1.results) + 1]] <- groups[[1]]
-  g2.results[[length(g2.results) + 1]] <- groups[[2]]
-  rm(s4b)
-  gc()
 
   # refit but now with p.scores
   dat$p.score <- bart$p.score
-
+  
   # vanillia
-  ps.s4b <- stan4bart(y ~ bart(. -g1 -g2) + (1|g1) + (1|g2),
+  s4b_random_intercepts <- stan4bart(y ~ bart(. -g) + (1|g),
                       data = dat,
                       treatment = treat,
                       cores = 1,
@@ -193,30 +187,55 @@ observational_random_intercepts <- function(tau, type, seed = NULL){
                       iter = 4000, 
                       seed = 0)
   
-  groups <- interval.extract.stan(ps.s4b, 'stan4bart with p.score')
-  g1.results[[length(g1.results) + 1]] <- groups[[1]]
-  g2.results[[length(g2.results) + 1]] <- groups[[2]]
+  results[[length(results) + 1]] <- extract.stan4bart(s4b_random_intercepts, .model = 'stan4bart random intercepts')
+  g.results[[length(g.results) + 1]] <- interval.extract.stan4bart(s4b_random_intercepts, 'stan4bart random intercepts')
+  rm(s4b_random_intercepts)
+  gc()
+  
+  s4b_random_slopes <- stan4bart(y ~ bart(. -g) + (treat|g),
+                                 data = dat,
+                                 treatment = treat,
+                                 cores = 1,
+                                 chains = 10,
+                                 iter = 4000, 
+                                 seed = 0)
 
-  results[[length(results) + 1]] <- extract.stan4bart(ps.s4b, .model = 'vanilla stan4bart with p.score')
+  
+  results[[length(results) + 1]] <- extract.stan4bart(s4b_random_slopes, .model = 'stan4bart random slopes')
+  g.results[[length(g.results) + 1]] <- interval.extract.stan4bart(s4b_random_slopes, 'stan4bart random slopes')
+  rm(s4b_random_slopes)
+  gc()
+  
+  
+  # vanilla bcf 
+  bcf_fit <- bcf(y , treat, as.matrix(X), as.matrix(X), bart$p.score, 2000, 2000)
+  results[[length(results) + 1]] <- extract.bcf(bcf_fit, .model = 'vanilla bcf')
+  g.results[[length(g.results) + 1]] <- interval.extract.bcf(bcf_fit, .model = 'vanilla bcf')
+  
+  rm(bcf_fit)
+  gc()
+  
+  groups <- matrix(nrow = nrow(dat), ncol = length(unique(g)))
+  for (i in 1:length(unique(g))) {
+    groups[, i] <- ifelse(g == unique(g)[order(unique(g))][i], 1, 0)
+  }
 
-  rm(ps.s4b)
+  names(groups) <- paste0('group_', unique(g)[order(unique(g))])
+  X_mat <- as.matrix(cbind(X, groups))
+  bcf_fit <- bcf(y , treat, X_mat, X_mat, bart$p.score, 2000, 2000)
+  results[[length(results) + 1]] <- extract.bcf(bcf_fit, .model = 'bcf with groups')
+  g.results[[length(g.results) + 1]] <- interval.extract.bcf(bcf_fit, .model = 'bcf with groups')
+  rm(bcf_fit)
   gc()
 
-  singular <- isSingular(partial_pool)
   results <- bind_rows(results)
   rownames(results) <- 1:nrow(results)
-  g1.results <- bind_rows(g1.results)
-  g2.results <- bind_rows(g2.results)
-  
+  group.results <- bind_rows(g.results)
+
   out <-  loo::nlist(
     results,
-    singular,
-    g1.results,
-    g2.results
+    group.results 
   )
   
   return(out)
 }
-
-
-
